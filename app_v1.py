@@ -5,7 +5,6 @@ from datetime import datetime
 import os
 from dotenv import load_dotenv
 import time
-import pandas as pd
 
 load_dotenv()
 
@@ -16,39 +15,34 @@ if not USERNAME or not PASSWORD:
     raise ValueError(".env dosyasında WLC_USERNAME ve/veya WLC_PASSWORD tanımlı değil!")
 
 MAX_WORKERS = 32
-OUTPUT_FILE = "wlc_report.xlsx"
+OUTPUT_FILE = "results.txt"
 PROMPT = r'\(Cisco Controller\)\s*>'
 LOCK = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-results = []
 
 def handle_cisco_prompts(channel):
     buffer = ""
     while True:
         if channel.recv_ready():
             buffer += channel.recv(9999).decode('utf-8')
+            
+            # Kullanıcı adı istendiğinde
             if "User:" in buffer:
                 channel.send(f"{USERNAME}\n")
                 buffer = ""
                 time.sleep(1)
+            
+            # Parola istendiğinde
             if "Password:" in buffer:
                 channel.send(f"{PASSWORD}\n")
                 buffer = ""
                 time.sleep(1)
+            
+            # Komut istemi (>) bulunursa
             if re.search(PROMPT, buffer):
                 return True
+            
         else:
             time.sleep(0.5)
-
-def process_output(ip, output):
-    groups = []
-    for line in output.split('\n'):
-        cleaned_line = line.replace('\r', '').strip()
-        match = re.match(r'^(.+?)\s{2,}(\d+)$', cleaned_line)
-        if match and not cleaned_line.startswith(('---', 'FlexConnect', 'Group')):
-            group_name = match.group(1).strip()
-            ap_count = match.group(2)
-            groups.append((ip, group_name, ap_count))
-    return groups
 
 def ssh_connection(ip):
     try:
@@ -67,7 +61,6 @@ def ssh_connection(ip):
             output = ""
             for cmd in commands:
                 channel.send(f"{cmd}\n")
-                time.sleep(1)
                 while True:
                     if channel.recv_ready():
                         data = channel.recv(9999).decode('utf-8')
@@ -77,14 +70,24 @@ def ssh_connection(ip):
                     else:
                         time.sleep(0.5)
             
-            # Verileri işle ve global listeye ekle
-            groups = process_output(ip, output)
+            # groups = re.findall(r'(\S+)\s+\d+\s+\d+\s+\d+\s+(\d+)', output)
+            groups = []
+            for line in output.split('\n'):
+                match = re.match(r'^(\S.+?)\s{2,}(\d+)\s*$', line)
+                if match and not line.startswith(('---', 'FlexConnect', 'Group', '\r')):
+                    group_name = match.group(1).strip()
+                    ap_count = match.group(2)
+                    groups.append((group_name, ap_count))
+                    
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             
-            # Thread-safe veri ekleme
-            def add_to_results():
-                results.extend(groups)
-            LOCK.submit(add_to_results).result()
+            def write_to_file():
+                with open(OUTPUT_FILE, 'a') as f:
+                    f.write(f"\n[{timestamp}] WLC {ip}:\n")
+                    for group in groups:
+                        f.write(f"Grup: {group[0]}, AP Sayısı: {group[1]}\n")
             
+            LOCK.submit(write_to_file).result()
             client.close()
             return f"{ip}: Başarılı - {len(groups)} grup bulundu"
             
@@ -99,9 +102,10 @@ def main():
         print("Hata: wlc_servers.txt dosyası bulunamadı!")
         return
 
-    # Eski verileri temizle
-    results.clear()
-    
+    with open(OUTPUT_FILE, 'w') as f:
+        f.write(f"FlexConnect Grup Raporu - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+        f.write("="*50 + "\n")
+
     with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
         futures = {executor.submit(ssh_connection, ip): ip for ip in ips}
         
@@ -112,14 +116,6 @@ def main():
                 print(f"{ip}: {result}")
             except Exception as e:
                 print(f"{ip}: Kritik hata - {str(e)}")
-
-    # Excel'e yaz
-    if results:
-        df = pd.DataFrame(results, columns=['WLC IP Adresi', 'Flexconnect Grup Adı', 'AP Sayısı'])
-        df.to_excel(OUTPUT_FILE, index=False, engine='openpyxl')
-        print(f"\n{len(df)} kayıt {OUTPUT_FILE} dosyasına kaydedildi.")
-    else:
-        print("Kaydedilecek veri bulunamadı!")
 
 if __name__ == "__main__":
     main()

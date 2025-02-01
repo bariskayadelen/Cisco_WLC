@@ -1,0 +1,7 @@
+# Cisco WLC Script Requirements
+# Python 3.8+ için uyumlu
+
+paramiko==3.4.0          # SSH bağlantıları için
+python-dotenv==1.0.0     # .env dosya yönetimi için
+pandas==2.1.4
+openpyxl==3.1.2
