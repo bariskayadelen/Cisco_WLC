@@ -1,0 +1,5 @@
+CREATE TABLE flexconnect_groups (
+    "WLC IP Adresi" TEXT,
+    "Flexconnect Grup Adı" TEXT,
+    "AP Sayısı" INTEGER
+)
